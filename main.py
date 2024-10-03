@@ -4,8 +4,9 @@ import platform
 import discord
 import updater
 import pytz
+import json
 
-from errorHandler import send_error_message
+from message_embeds import send_error_message
 
 from datetime import datetime
 from discord.ext import commands, tasks
@@ -33,44 +34,50 @@ async def on_app_command_error(interaction: discord.Interaction,
     await send_error_message(interaction, error)
 
 
-#Update jsonData
 @client.command()
-async def update(ctx, folder = None):
-#@app_commands.command(name="updatedata", description="Search for a player's basic information")
-#async def update(interaction: discord.Interaction, folder = None):
+async def update(ctx, file: str = None):
     if ctx.author.id == 292003372649807872:
-
         await ctx.send("Updating...")
-        
-        remove_success = bool()
-        get_success = bool()
-        folders_removed = int()
-        files_removed = int()
-        folders_processed = int()
-        files_processed = int()
-        error_message = str()
-        if folder is not None and folder.endswith('s'):
-            folder = folder.strip('s')
-        if folder is not None:
-            remove_success, folders_removed, files_removed, error_message = updater.remove_jsonData(folder)
-            if remove_success:
-                get_success, folders_processed, files_processed, error_message = updater.get_jsonData(folder)
-        else:
-            remove_success, folders_removed, files_removed, error_message = updater.remove_jsonData()
-            if remove_success:
-                get_success, folders_processed, files_processed, error_message = updater.get_jsonData()
-    
-        if remove_success:
-            await ctx.send(f"{ctx.author.mention} I removed {folders_removed} folder(s) with {files_removed} file(s)")
-            if get_success:
-                await ctx.send(f"{ctx.author.mention} I updated {folders_processed} folder(s) and {files_processed} file(s)")
+        #Helper function
+        def process_update(func, file=None):
+            success, files, item_count, error = func(file)
+            if success:
+                return f"{'='*30}\n{ctx.author.mention} I {'removed' if func.__name__ == 'remove_json' else 'fetched'} {len(files)} files:\n- " \
+                       f"{'\n- '.join(files)}\nContaining {item_count} items\n{'='*30}", None
             else:
-                await ctx.send(f"Get Error: {error_message}")
-        else:
-            await ctx.send(f"Remove Error: {error_message}")
-            
+                return None, error
+
+        #Handle plural "s" at the end of the file
+        if file and file.endswith('s'):
+            file = file.rstrip('s')
+
+        #Removing and fetching logic
+        remove_message, remove_error = process_update(updater.remove_json, file)
+        if remove_error:
+            await ctx.send(f"Remove Error: {remove_error}")
+            return
+        await ctx.send(remove_message)
+
+        fetch_message, fetch_error = process_update(updater.fetch_json, file)
+        if fetch_error:
+            await ctx.send(f"Fetch Error: {fetch_error}")
+            return
+        await ctx.send(fetch_message)
+
     else:
         await ctx.send("You do not have permission to use this command.")
+
+@client.command()
+async def count(ctx, file: str):
+    if file.endswith('s'):
+        file = file.rstrip('s')
+    try:
+        with open(f'jsonData/{file}s.json') as f:
+            await ctx.send(f"There are {len(json.load(f))} {file}s")
+    except Exception as e:
+        await ctx.send(f"Error: {e}")
+
+
 
 @tasks.loop(minutes=5)
 async def change_status():
