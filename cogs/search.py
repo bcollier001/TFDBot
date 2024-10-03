@@ -13,7 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, View
 from datetime import datetime, timedelta
-from errorHandler import send_error_message
+from message_embeds import send_error_message
 
 def get_current_rotation():
     # Set the timezone
@@ -79,26 +79,52 @@ class Search(commands.Cog):
 
     #Full Search
     @app_commands.command(name="search", description="Search for a player")
-    async def search(self, interaction: discord.Interaction, name: str):
+    async def search(self, interaction: discord.Interaction, name: str = None):
+        if name is None:
+            with open('jsonData/userlinks.json', 'r') as f:
+                links = json.load(f)
+            link = next((link for link in links if link['Discord_User_ID'] == interaction.user.id), None)
+            if link is not None:
+                name = link['Nexon_Username']
+            else:
+                await send_error_message(interaction, "Your discord account is not linked, please provide a Nexon acccount name.")
+                return
+        if re.match(r'<@!*\d+>', name):
+            with open('jsonData/userlinks.json', 'r') as f:
+                links = json.load(f)
+            link = next((link for link in links if link['Discord_User_ID'] == int(name.strip('<@!>'))), None)
+            if link:
+                name = link['Nexon_Username']
+            else:
+                user = interaction.guild.get_member(int(name.strip('<@!>')))
+                if user:
+                    await send_error_message(interaction, f'{user.name} is not linked to a Nexon account.')
+                else:
+                    await send_error_message(interaction, "That user is not part of this server.")
+                return
         descendantJSON = TFD_API.search_player_descendant(name)
         if 'error' not in descendantJSON:
-            descendant_id = descendantJSON['descendant_id']
-            descendant_files = os.listdir('jsonData/descendants')
-            pattern = re.compile(rf'.* - {descendant_id}\.json')
-            descendant_filename = next((f for f in descendant_files if pattern.search(f)), None)
-            with open(f'jsonData/descendants/{descendant_filename}', 'r') as f:
-                descendant_data = json.load(f)
+            with open(f'jsonData/descendants.json', 'r') as f:
+                for descendant in json.load(f):
+                    if descendant["descendant_id"] == descendantJSON['descendant_id']:
+                        descendant_data = descendant
+                        break
+
     
-            descendant_embed = discord.Embed(title=f"__**{descendant_data['descendant_name']}**__",color=discord.Color.blurple())
+            descendant_embed = discord.Embed(title=f"__**{descendant_data['descendant_name']}**__",
+                                             description=f"Level: {descendantJSON['descendant_level']}\nModule Capacity:{descendantJSON['module_capacity']}/{descendantJSON['module_max_capacity']}",
+                                             color=discord.Color.gold() if descendant_data['descendant_name'].startswith('Ultimate') else discord.Color.blurple())
             descendant_embed.set_thumbnail(url=descendant_data['descendant_image_url'])
     
-            module_files = os.listdir('jsonData/modules')
+            with open("jsonData/modules.json", 'r') as f:
+                module_json = json.load(f)
             for module in descendantJSON['module']:
-                pattern = re.compile(rf'.* - {module["module_id"]}\.json')
-                module_filename = next((f for f in module_files if pattern.search(f)), None)
-                with open(f'jsonData/modules/{module_filename}', 'r') as f:
-                    module_data = json.load(f)
+                for module_item in module_json:
+                    if module_item["module_id"] == module["module_id"]:
+                        module_data = module_item
+                        break
                 descendant_embed.add_field(name=f"**{module_data['module_name']}**", value=f"```Enhancement Level: {module['module_enchant_level']}```", inline=True)
+            
             descendant_embed.add_field(name='OUID',value=f"{descendantJSON['ouid']}", inline=False)
             descendant_embed.set_author(name=f"{descendantJSON['user_name']}")
             await interaction.response.send_message(embed=descendant_embed)
@@ -111,8 +137,30 @@ class Search(commands.Cog):
     
     #Basic Search
     @app_commands.command(name="bsearch", description="Search for a player's basic information")
-    async def bsearch(self, interaction: discord.Interaction, name: str):
-
+    async def bsearch(self, interaction: discord.Interaction, name: str = None):
+        
+        if name is None:
+            with open('jsonData/userlinks.json', 'r') as f:
+                links = json.load(f)
+            link = next((link for link in links if link['Discord_User_ID'] == interaction.user.id), None)
+            if link is not None:
+                name = link['Nexon_Username']
+            else:
+                await send_error_message(interaction, "Your discord account is not linked, please provide a Nexon acccount name.")
+                return
+        if re.match(r'<@!*\d+>', name):
+            with open('jsonData/userlinks.json', 'r') as f:
+                links = json.load(f)
+            link = next((link for link in links if link['Discord_User_ID'] == int(name.strip('<@!>'))), None)
+            if link:
+                name = link['Nexon_Username']
+            else:
+                user = interaction.guild.get_member(int(name.strip('<@!>')))
+                if user:
+                    await send_error_message(interaction, f'{user.name} is not linked to a Nexon account.')
+                else:
+                    await send_error_message(interaction, "That user is not part of this server.")
+                return
         infoJSON = TFD_API.search_playerBasic_descendant(name)
         if 'error' not in infoJSON:
             platform_url = str()
@@ -131,14 +179,7 @@ class Search(commands.Cog):
             basicInfo_embed.set_author(name=f"{infoJSON['user_name']}", icon_url=platform_url)
             await interaction.response.send_message(embed=basicInfo_embed)
         else:
-            basicInfo_embed = discord.Embed(title=f"Error",
-                 description=f"{infoJSON['error']['message']}",
-                 color=discord.Color.red())
-            thumbnail_filename = 'ErrorIcon.png'
-            thumbnail_file = discord.File(f'icons/{thumbnail_filename}',
-            filename=f'{thumbnail_filename}')
-            basicInfo_embed.set_thumbnail(url=f'attachment://{thumbnail_file.filename}')
-            await interaction.response.send_message(embed=basicInfo_embed,file=thumbnail_file)
+            await send_error_message(interaction, f"{infoJSON['error']['message']}")
 
 
 
@@ -160,12 +201,15 @@ class Search(commands.Cog):
         except Exception as e:
             await send_error_message(interaction, str(e))
 
-    
-    async def descendant_autocomplete(self, interaction: discord.Interaction, current: str):
-        descendant_files = os.listdir('jsonData/descendants')
+
+    with open('jsonData/descendants.json', 'r') as f:
+        descendants = json.load(f)
+
+    async def descendant_autocomplete(self, interaction, current: str):
+        descendant_names = [descendant["descendant_name"] for descendant in self.descendants]
         choices = [
-            app_commands.Choice(name=file.split(' ')[0].replace('_',' '), value=file.split(' ')[0])
-            for file in descendant_files if current.replace(' ','_').lower() in file.lower()
+            app_commands.Choice(name=name, value=name)
+            for name in descendant_names if current.lower() in name.lower()
         ]
         return choices
     
@@ -173,14 +217,17 @@ class Search(commands.Cog):
     @app_commands.command(name="dsearch", description="Search for a descendant")
     @app_commands.autocomplete(descendant=descendant_autocomplete)
     async def dsearch(self, interaction: discord.Interaction, descendant: str, level: app_commands.Range[int, 1, 40] = 1):
-        pattern = re.compile(rf"{descendant.strip().replace(' ','_')}.*\.json", re.IGNORECASE)
-        descendant_filename = next((f for f in os.listdir('jsonData/descendants') if pattern.search(f)), None)
-        #print('filename:', descendant_filename)
-        if descendant_filename is None:
+        descendant_name = descendant.strip()
+        with open("jsonData/descendants.json", 'r') as f:
+            descendant_json = json.load(f)
+        descendant_data = None
+        for descendant_info in descendant_json:
+            if descendant_info["descendant_name"] == descendant_name:
+                descendant_data = descendant_info
+                break
+        if descendant_data is None:
             await send_error_message(interaction, f"No descendant found with the name '{descendant}'")
             return
-        with open(f'jsonData/descendants/{descendant_filename}', 'r') as f:
-            descendant_data = json.load(f)
         descendant_name = descendant_data['descendant_name']
         descendant_image_url = descendant_data['descendant_image_url']
         for stat in descendant_data['descendant_stat']:
@@ -203,9 +250,6 @@ class Search(commands.Cog):
         for detail in descendant_level_stat['stat_detail']:
             descendant_level_stat_embed.add_field(name=f"{detail['stat_type']}", value=detail['stat_value'], inline=False)
         await interaction.response.send_message(embed=descendant_level_stat_embed, view=skill_view)
-        
-                                   
-
 
 
 
@@ -229,9 +273,7 @@ class Search(commands.Cog):
         return emoji
     
 
-    async def create_module_embed(self, module_filename):
-        with open(f'jsonData/modules/{module_filename}', 'r') as f:
-            module_data = json.load(f)
+    async def create_module_embed(self, module_data):
         cata_emoji = await self.fetch_emoji(1288695979402592358)
         module_emoji = await self.fetch_emoji(1289360620717867109)
         module_name = module_data['module_name']
@@ -263,73 +305,37 @@ class Search(commands.Cog):
     #module Search
     @app_commands.command(name="msearch", description="Search for a module")
     @app_commands.choices(ammo_type=[
-        app_commands.Choice(name='General', value=1),
-        app_commands.Choice(name='Special', value=2),
-        app_commands.Choice(name='Impact', value=3),
-        app_commands.Choice(name='High-Power', value=4),
+        app_commands.Choice(name='General', value=25201),
+        app_commands.Choice(name='Special', value=25202),
+        app_commands.Choice(name='Impact', value=25203),
+        app_commands.Choice(name='High-Power', value=25204),
     ])
     async def msearch(self, interaction: discord.Interaction,
                       module_name: str,
                       ammo_type: app_commands.Choice[int] = None):
-        module_files = os.listdir('jsonData/modules')
-        module_name = module_name.strip().replace(' ', '_')
-        print(f'looking for "{module_name} - *.json"')
-        #broad search for module name
-        pattern = re.compile(rf"{module_name}.*\.json", re.IGNORECASE)
-        module_filenames = [f for f in module_files if pattern.search(f)]
-        print(module_filenames)
-        if len(module_filenames) > 0:
+        
+        module_name = module_name.strip()
+        pattern = re.compile(rf".*{module_name}.*", re.IGNORECASE)
 
-            if ammo_type is not None:
-                matching_module_files = []
-
-                for module in module_filenames:
-                    module_serial = module.split(' ')[-1].split('.')[0]
-
-                    if module_serial.startswith(
-                            str(self.weapon_ammo_type_serials[ammo_type.name])):
-                        matching_module_files.append(module)
-
-                if len(matching_module_files) > 1:
-                    await interaction.response.send_message(
-                        embed = await self.create_module_embed(matching_module_files[0]))
-                    #await interaction.response.send_message(f"Found {len(matching_module_files)} modules with ammo type {ammo_type.name} and name {module_name}.")
-
-                elif len(matching_module_files) == 1:
-                    module_embed = await self.create_module_embed(matching_module_files[0])
-                    await interaction.response.send_message(embed=module_embed)
-
-                else:
-                    await interaction.response.send_message(
-                        f"No modules found with ammo type {ammo_type.name}.")
-
-            elif len(module_filenames) > 1 and module_filenames[0].split(
-                    ' ')[-1].split('.')[0].startswith('252'):
-                await interaction.response.send_message(
-                    "You seem to be looking for weapon module, please specify the ammo type."
-                )
-            elif len(module_filenames) > 1 and module_filenames[0].split(
-                    ' ')[-1].split('.')[0].startswith('25'):
-                found_modules = '\n- '.join([
-                    filename[:-9].replace('25201', 'General').replace(
-                        '25202', 'Special').replace('25203', 'Imapact').replace(
-                            '25204', 'High-Power').replace('25100', 'Descendant') for filename in module_filenames
-                ])
-                await interaction.response.send_message(
-                    f"I have found multiple modules that match your search. Please be more specific.\n\nModules Found:\n- {found_modules}"
-                )
-
-            elif len(module_filenames) == 1:
-                module_embed = await self.create_module_embed(module_filenames[0])
-                await interaction.response.send_message(embed=module_embed)
-                #cata_emoji = await self.fetch_emoji(1288695979402592358)
-                #message = await interaction.original_response()
-                #await message.add_reaction(cata_emoji)
-                #print('added emoji')
+        with open("jsonData/modules.json", 'r') as f:
+            module_data = json.load(f)
+        matching_modules = [m for m in module_data if pattern.search(m["module_name"])]
+        
+        if len(matching_modules) == 0:
+            await send_error_message(interaction,f"No modules found with name `{module_name}`.")
+        elif len(matching_modules) == 1:
+            module_embed = await self.create_module_embed(matching_modules[0])
+            await interaction.response.send_message(embed=module_embed)
         else:
-            await interaction.response.send_message(
-                f"No modules found with name {module_name}.")
-
+            if ammo_type is not None:
+                matched_module = next((module for module in matching_modules if module["module_id"].startswith(str(ammo_type.value))), None)
+                module_embed = await self.create_module_embed(matched_module)
+                await interaction.response.send_message(embed=module_embed)
+            elif matching_modules[0]["module_id"].startswith('252'):
+                await send_error_message(interaction, "You seem to be looking for weapon module, please specify the `ammo type`.")
+            else:
+                module_list = f"\n- {'\n- '.join(list(set([module['module_name'] for module in matching_modules])))}"
+                await send_error_message(interaction, f"I have found `{len(matching_modules)}` modules that match your search, please be more specific.\n\nFound Modules:{module_list}")
 
 
 
@@ -377,12 +383,11 @@ class Search(commands.Cog):
                   arche_type.name if arche_type is not None else None]
         
         keys = ["reward_type", "reactor_element_type", "weapon_rounds_type", "arche_type"]
-        pattern = re.compile(r'^(?!\d)')
-        reward_files = [f for f in os.listdir('jsonData/rewards') if pattern.search(f)]
+        with open("jsonData/rewards.json", 'r') as f:
+            all_rewards_data = json.load(f)
+        active_reward_locations = [location for location in all_rewards_data if len(location["battle_zone"]) != 0]
         current_rewards = []
-        for file in reward_files:
-            with open(f'jsonData/rewards/{file}', 'r') as f:
-                rewards_data = json.load(f)
+        for rewards_data in active_reward_locations:
             map_name = rewards_data['map_name']
             for battle_zone in rewards_data['battle_zone']:
                 battle_zone_name = battle_zone['battle_zone_name']
@@ -436,18 +441,15 @@ class Search(commands.Cog):
     #weapon Search
     @app_commands.command(name="wsearch", description="Search for a weapon")
     async def wsearch(self, interaction: discord.Interaction, weapon_name: str):
-        #search for weapon name
-        weapon_files = os.listdir('jsonData/weapons')
-        #print(weapon_files)
-        weapon_name = weapon_name.strip().replace(' ','_')
-        print(f'looking for "{weapon_name} - *.json"')
+        with open("jsonData/weapons.json", 'r') as f:
+            all_weapon_data = json.load(f)
+        weapon_name = weapon_name.strip()
+        print(f'looking for "{weapon_name}"')
         #broad search for weapon name
-        pattern = re.compile(rf"{weapon_name}.*\.json", re.IGNORECASE)
-        weapon_filename = next((f for f in weapon_files if pattern.search(f)), None)
+        pattern = re.compile(rf".*{weapon_name}.*", re.IGNORECASE)
+        weapon_data = next((w for w in all_weapon_data if pattern.search(w["weapon_name"])), None)
         #load weapon data
-        if weapon_filename is not None:
-            with open(f'jsonData/weapons/{weapon_filename}', 'r') as f:
-                weapon_data = json.load(f)
+        if weapon_data is not None:
             TierColors = {
                 'Standard': discord.Color.light_grey(),
                 'Rare': discord.Color.purple(),
@@ -473,14 +475,12 @@ class Search(commands.Cog):
                                    value=f"```{weapon_data['weapon_rounds_type']}```",
                                    inline=True)
             #load stats
-            stat_files = os.listdir('jsonData/stats')
+            with open("jsonData/stats.json", 'r') as f:
+                all_stat_data = json.load(f)
             stat_entries = 0
             for stat in weapon_data['base_stat']:
-                pattern = re.compile(rf'.* - {stat["stat_id"]}\.json')
-                stat_filename = next((f for f in stat_files if pattern.search(f)), None)
-                if stat_filename is not None:
-                    with open(f'jsonData/stats/{stat_filename}', 'r') as f:
-                        stat_data = json.load(f)
+                stat_data = next((f for f in all_stat_data if f["stat_id"] == stat["stat_id"]), None)
+                if stat_data is not None:
                     #display each stat and its value
                     weapon_embed.add_field(name=f"{stat_data['stat_name']}",
                                            value=f"```{stat['stat_value']}```",
